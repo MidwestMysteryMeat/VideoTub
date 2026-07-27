@@ -230,5 +230,3 @@ repo), VideoTub's own code stays proprietary and free of third-party-license ent
 ---
 
 <sub>Support development — <a href="https://ko-fi.com/midwestmysterymeat">Ko-fi</a></sub>
-
-<img src=".github/donation-qrcode.png" width="120" alt="Donation QR code">
