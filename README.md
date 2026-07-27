@@ -226,3 +226,9 @@ authors accept no liability for how deployed instances are used. See
 Because those optional tools are only ever *invoked* (never copied into this
 repo), VideoTub's own code stays proprietary and free of third-party-license entanglement; if you redistribute a bundle that
 *includes* them, honor their licenses too.
+
+---
+
+<sub>Support development — <a href="https://ko-fi.com/midwestmysterymeat">Ko-fi</a></sub>
+
+<img src=".github/donation-qrcode.png" width="120" alt="Donation QR code">
