@@ -254,7 +254,11 @@ function looksLikeVideo(filePath) {
     return false;
   } catch (_) { return false; } finally { if (fd !== undefined) { try { fs.closeSync(fd); } catch (_) {} } }
 }
+// FFPROBE_DISABLED=1 skips probing entirely (same result as ffprobe missing).
+// Mirrors MALWARE_SCAN=off — used by tests and trusted/dev setups.
+const FFPROBE_DISABLED = process.env.FFPROBE_DISABLED === "1" || process.env.FFPROBE_DISABLED === "true";
 function ffprobeCheck(filePath) {
+  if (FFPROBE_DISABLED) return Promise.resolve({ ok: true, available: false });
   return new Promise((resolve) => {
     let out = "";
     let child;
