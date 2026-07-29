@@ -3,3 +3,5 @@ data/
 tmp/
 videos/
 thumbs/
+__pycache__/
+*.pyc
