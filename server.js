@@ -351,7 +351,9 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(PUBLIC_DIR));
-app.use("/videos", express.static(VIDEO_DIR));
+// Prune before serving files so an expired video isn't watchable for up to
+// CLEANUP_INTERVAL_MS past expiry (same pattern as the list/get endpoints).
+app.use("/videos", (req, res, next) => { pruneExpiredVideos(); next(); }, express.static(VIDEO_DIR));
 app.use("/thumbs", express.static(THUMB_DIR));
 
 // ---------------------------------------------------------------------------
@@ -393,6 +395,7 @@ app.get("/api/videos/:id", (req, res) => {
 
 // Minimal shareable embed player.
 app.get("/embed/:id", (req, res) => {
+  pruneExpiredVideos();
   const row = db.getVideo(req.params.id);
   if (!row || row.approved === 0) { res.status(404).send("Not found"); return; }
   const src = `/videos/${encodeURIComponent(row.stored_name)}`;
