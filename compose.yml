@@ -10,6 +10,7 @@ services:
       # - MAX_UPLOAD_MB=250
       # - MAX_DURATION_SEC=900
       # - CONTENT_SCAN_CMD=python3 tools/nsfw_scan.py   # requires nudenet in image
+      # - TRUST_PROXY=1                       # ONLY if behind a reverse proxy (nginx/caddy) that sets X-Forwarded-For
       - POW_DIFFICULTY=18
     volumes:
       - ./data:/app/data       # SQLite DB, denylists, moderation log

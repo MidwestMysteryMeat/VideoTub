@@ -81,9 +81,19 @@ function isAllowedUpload(file) {
 function removeIfExists(filePath) {
   try { if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (_) {}
 }
+// TRUST_PROXY=1 (default OFF): only honor X-Forwarded-For when explicitly
+// deployed behind a reverse proxy (nginx/caddy). On a directly exposed
+// instance the header is client-controlled — trusting it would let anyone
+// forge their IP to dodge rate limits and bans and to fabricate the distinct
+// reporters needed for auto-takedown. When enabled, the LEFTMOST entry
+// (original client as reported by the proxy chain) is used.
+const TRUST_PROXY = process.env.TRUST_PROXY === "1" || process.env.TRUST_PROXY === "true";
 function clientIp(req) {
-  const fwd = (req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-  return fwd || req.socket.remoteAddress || "unknown";
+  if (TRUST_PROXY) {
+    const fwd = (req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+    if (fwd) return fwd;
+  }
+  return req.socket.remoteAddress || "unknown";
 }
 function hashIp(req) {
   return crypto.createHash("sha256").update(IP_SALT + clientIp(req)).digest("hex").slice(0, 16);

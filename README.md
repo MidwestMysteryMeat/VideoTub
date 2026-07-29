@@ -121,6 +121,15 @@ commented sidecar / image add-on in `compose.yml`).
 - `MAX_DURATION_SEC` (default `900`) — max clip length (needs `ffprobe`)
 - `CONTENT_SCAN_CMD` — external content scanner; file path appended as last arg
 - `MALWARE_SCAN` — set `off` to skip malware scanning (trusted/dev only)
+- `FFPROBE_DISABLED` — set `1` to skip ffprobe validation even when ffprobe is
+  installed (trusted/dev/tests only; same behavior as ffprobe being absent)
+- `TRUST_PROXY` (default **off**) — set `1` **only when VideoTub runs behind a
+  reverse proxy** (nginx/caddy) that sets `X-Forwarded-For`. When on, the
+  leftmost `X-Forwarded-For` entry is used as the client IP; when off, the TCP
+  socket address is used and the header is ignored. Never enable it on a
+  directly exposed instance: clients could forge the header to dodge per-IP
+  rate limits and bans and to fake the distinct reporters needed for
+  auto-takedown.
 - `PAGE_SIZE` (default `24`) — videos per page in the listing
 - `VIDEOTUB_RUNTIME_DIR` — relocate the `data/`, `videos/`, `thumbs/`, `tmp/` dirs
 
@@ -203,6 +212,12 @@ not a compliance strategy.
 an anonymous public instance without first adding content moderation, a
 report/takedown workflow, rate limiting, request logging suitable for legal
 process, a terms of service, and independent legal review for your jurisdiction.
+
+**Reverse proxy note:** if you do deploy behind nginx/caddy/another reverse
+proxy, set `TRUST_PROXY=1` so bans/rate limits key on the real client IP from
+`X-Forwarded-For` instead of the proxy's address. Leave it unset (the default)
+whenever clients connect to VideoTub directly — otherwise the client-controlled
+header can be forged to bypass rate limits, bans, and report deduplication.
 
 This software is provided **"as is", without warranty of any kind**; the
 authors accept no liability for how deployed instances are used. See
