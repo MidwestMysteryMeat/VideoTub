@@ -58,16 +58,12 @@ hashing; **ClamAV** (optional) enables cross-platform malware scanning.
 - Allowed file types only: `.mp4`, `.webm`, `.mkv`, `.mov`, `.avi`, `.m4v`
 - Default max upload size: `250 MB`
 - Retention: `24 hours` (then auto-deleted)
-- Scanner: `MpCmdRun.exe` (Windows Defender)
+- Scanner: ClamAV (`clamdscan`/`clamscan`) when present, else Windows Defender
+  (`MpCmdRun.exe`)
 
-Uploads are blocked if scanning fails or malware is detected.
-
-> **⚠️ The malware scanner is Windows-only.** It shells out to Windows Defender
-> (`MpCmdRun.exe`). On Linux/macOS the scanner isn't found, so with the default
-> `ALLOW_UNSCANNED_UPLOADS=false` **every upload is blocked** (fails safe). To run
-> on a non-Windows host you must set `ALLOW_UNSCANNED_UPLOADS=true`, which means
-> **uploads are stored with no malware scanning at all.** Only do that behind a
-> trusted network, or wire in a cross-platform scanner (e.g. ClamAV) first.
+Uploads are blocked if malware is detected, and also if the server cannot scan them
+at all — see **Malware scanning** under the deployment section for the three modes
+and how to pick one.
 
 ## Security notes
 
@@ -111,7 +107,8 @@ commented sidecar / image add-on in `compose.yml`).
 ## Optional Env Vars
 - `PORT` (default `3000`)
 - `MAX_UPLOAD_MB` (default `250`)
-- `ALLOW_UNSCANNED_UPLOADS` (default `false`; set `true` only for local dev fallback)
+- `ALLOW_UNSCANNED_UPLOADS` (default `false`) — set `true` to store an upload the
+  scanner could not check, instead of rejecting it. See **Malware scanning** below.
 - `ADMIN_KEY` — enables the admin moderation API when set (sent as `x-admin-key`)
 - `REPORT_AUTO_REMOVE` (default `3`) — distinct reports before auto-takedown
 - `UPLOAD_RATE_MAX` (default `5`) / `REPORT_RATE_MAX` (default `20`) per window
@@ -121,6 +118,8 @@ commented sidecar / image add-on in `compose.yml`).
 - `MAX_DURATION_SEC` (default `900`) — max clip length (needs `ffprobe`)
 - `CONTENT_SCAN_CMD` — external content scanner; file path appended as last arg
 - `MALWARE_SCAN` — set `off` to skip malware scanning (trusted/dev only)
+- `CLAMSCAN_PATH` — absolute path to a `clamscan`/`clamdscan` binary that is not on
+  `PATH`; takes priority over the `PATH` probe
 - `FFPROBE_DISABLED` — set `1` to skip ffprobe validation even when ffprobe is
   installed (trusted/dev/tests only; same behavior as ffprobe being absent)
 - `TRUST_PROXY` (default **off**) — set `1` **only when VideoTub runs behind a
@@ -218,6 +217,29 @@ proxy, set `TRUST_PROXY=1` so bans/rate limits key on the real client IP from
 `X-Forwarded-For` instead of the proxy's address. Leave it unset (the default)
 whenever clients connect to VideoTub directly — otherwise the client-controlled
 header can be forged to bypass rate limits, bans, and report deduplication.
+
+**Malware scanning:** the scanner is resolved once at boot — ClamAV
+(`clamdscan`/`clamscan` on `PATH`, or `CLAMSCAN_PATH`) if present, else Windows
+Defender (`MpCmdRun.exe`) — and the result is printed in the startup banner. There
+are exactly three modes, and **you must choose one deliberately**:
+
+| startup line | uploads | when |
+|---|---|---|
+| `malware scanner: ClamAV (clamscan)` | scanned, blocked on threat | a scanner was found — the intended setup |
+| `malware scanner: NONE FOUND` + `!! ... EVERY upload will be rejected with HTTP 503` | **all rejected** | no scanner on this host, and no opt-out set |
+| `malware scanner: DISABLED (MALWARE_SCAN=off)` + `!! ... WITHOUT being scanned` | stored unscanned | you set `MALWARE_SCAN=off` |
+| `NONE FOUND` or a real scanner, + `!! ALLOW_UNSCANNED_UPLOADS=true ...` | stored unscanned when the scan cannot run | you set `ALLOW_UNSCANNED_UPLOADS=true` |
+
+The no-scanner case **fails closed**: uploads return `503` with the reason and the
+remedy in the response body, because silently storing unscanned files is worse than
+being unavailable. A fresh clone on Linux/macOS without ClamAV lands here, so
+`npm install && node server.js` looks healthy while every upload is refused —
+install ClamAV (`apt install clamav`, `brew install clamav`) or opt out explicitly.
+
+Opting out is never inferred from a missing scanner. `MALWARE_SCAN=off` skips
+scanning entirely; `ALLOW_UNSCANNED_UPLOADS=true` still attempts a scan but stores
+the file when the scanner is unavailable or errors out. Both print a `!!` warning to
+stderr on every boot. Only use them on a trusted/LAN instance.
 
 This software is provided **"as is", without warranty of any kind**; the
 authors accept no liability for how deployed instances are used. See

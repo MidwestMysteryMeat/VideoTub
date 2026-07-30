@@ -243,7 +243,9 @@ form.addEventListener("submit", async (event) => {
     });
     const payload = await res.json();
     if (!res.ok) {
-      throw new Error(payload.error || "Upload failed.");
+      // `remedy` is set when the failure is a server misconfiguration the operator
+      // can fix (e.g. no malware scanner installed) — show it, not just the refusal.
+      throw new Error([payload.error || "Upload failed.", payload.remedy].filter(Boolean).join(" "));
     }
 
     // Save the delete token in this browser so the uploader can remove their

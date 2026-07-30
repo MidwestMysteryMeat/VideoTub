@@ -183,19 +183,46 @@ function requireAdmin(req, res, next) {
 
 // ---------------------------------------------------------------------------
 // Malware scanning: ClamAV (cross-platform) preferred, else Windows Defender.
+//
+// The scanner is resolved ONCE at boot into SCANNER, and the result is logged, so an
+// operator learns the upload security posture at startup instead of one failed upload
+// at a time. A host with no scanner FAILS CLOSED — uploads are rejected with a 503 and
+// an explanation, never stored unscanned. Storing unscanned uploads is opt-in only:
+//
+//   MALWARE_SCAN=off              skip scanning entirely
+//   ALLOW_UNSCANNED_UPLOADS=true  still try to scan, but accept the file when the
+//                                 scanner is unavailable or errors out
+//
+// Both are loud at boot. Neither is ever inferred from a missing scanner.
 // ---------------------------------------------------------------------------
-let _hasClam = null;
-function hasClamAV() {
-  if (_hasClam === null) {
-    _hasClam = ["clamdscan", "clamscan"].some((c) => {
-      try { return spawnSync(c, ["--version"], { windowsHide: true }).status === 0; } catch (_) { return false; }
-    });
-  }
-  return _hasClam;
+const MALWARE_SCAN_DISABLED = process.env.MALWARE_SCAN === "off";
+// CLAMSCAN_PATH points at a clamscan/clamdscan binary that is not on PATH.
+const CLAMSCAN_PATH = process.env.CLAMSCAN_PATH || "";
+
+const SCANNER_HELP =
+  "Install ClamAV (`apt install clamav` / `brew install clamav`), or set CLAMSCAN_PATH " +
+  "to its binary. To run without a scanner you must opt in explicitly: MALWARE_SCAN=off " +
+  "skips scanning, ALLOW_UNSCANNED_UPLOADS=true stores files the scanner could not check.";
+
+function scannerVersionOk(bin) {
+  try { return spawnSync(bin, ["--version"], { windowsHide: true }).status === 0; } catch (_) { return false; }
 }
+
+// -> { mode: "disabled" | "clamav" | "windows-defender" | "none", bin, label }
+function resolveScanner() {
+  if (MALWARE_SCAN_DISABLED) return { mode: "disabled", bin: "", label: "DISABLED (MALWARE_SCAN=off)" };
+  const candidates = CLAMSCAN_PATH ? [CLAMSCAN_PATH] : ["clamdscan", "clamscan"];
+  for (const bin of candidates) {
+    if (scannerVersionOk(bin)) return { mode: "clamav", bin, label: `ClamAV (${bin})` };
+  }
+  const mpCmdRun = absoluteDefenderPath();
+  if (mpCmdRun) return { mode: "windows-defender", bin: mpCmdRun, label: `Windows Defender (${mpCmdRun})` };
+  return { mode: "none", bin: "", label: "NONE FOUND" };
+}
+
 function scanWithClamAV(filePath) {
   return new Promise((resolve) => {
-    const bin = (() => { try { return spawnSync("clamdscan", ["--version"], { windowsHide: true }).status === 0 ? "clamdscan" : "clamscan"; } catch (_) { return "clamscan"; } })();
+    const bin = SCANNER.bin || "clamscan";
     let out = "";
     const child = spawn(bin, ["--no-summary", "--stdout", filePath], { windowsHide: true });
     child.stdout.on("data", (c) => { out += c.toString(); });
@@ -229,7 +256,7 @@ function absoluteDefenderPath() {
   return null;
 }
 function scanWithDefender(filePath) {
-  const mpCmdRun = absoluteDefenderPath();
+  const mpCmdRun = SCANNER.bin || absoluteDefenderPath();
   if (!mpCmdRun) return Promise.resolve({ clean: false, threatDetected: false, scanner: "windows-defender", reason: "Windows Defender scanner executable not found" });
   return new Promise((resolve) => {
     let output = "";
@@ -244,10 +271,38 @@ function scanWithDefender(filePath) {
     });
   });
 }
-const MALWARE_SCAN_DISABLED = process.env.MALWARE_SCAN === "off";
+const SCANNER = resolveScanner();
+
 function scanForMalware(filePath) {
-  if (MALWARE_SCAN_DISABLED) return Promise.resolve({ clean: true, threatDetected: false, scanner: "disabled", reason: "scanning disabled" });
-  return hasClamAV() ? scanWithClamAV(filePath) : scanWithDefender(filePath);
+  if (SCANNER.mode === "disabled") {
+    return Promise.resolve({ clean: true, threatDetected: false, scanner: "disabled", reason: "scanning disabled (MALWARE_SCAN=off)" });
+  }
+  if (SCANNER.mode === "none") {
+    return Promise.resolve({ clean: false, threatDetected: false, scanner: "none", reason: "no malware scanner is installed on this server" });
+  }
+  return SCANNER.mode === "clamav" ? scanWithClamAV(filePath) : scanWithDefender(filePath);
+}
+
+// Announce the upload security posture. Anything that lets an unscanned file through
+// goes to stderr as a warning, because it is a deliberate weakening of the default.
+function logScannerPosture() {
+  console.log(`  malware scanner: ${SCANNER.label}`);
+  if (SCANNER.mode === "disabled") {
+    console.warn("  !! MALWARE_SCAN=off — uploads are stored WITHOUT being scanned for malware.");
+    return;
+  }
+  if (SCANNER.mode === "none") {
+    if (STRICT_SCANNER) {
+      console.warn("  !! No malware scanner available — EVERY upload will be rejected with HTTP 503.");
+      console.warn(`  !! ${SCANNER_HELP}`);
+    } else {
+      console.warn("  !! No malware scanner available and ALLOW_UNSCANNED_UPLOADS=true — uploads are stored WITHOUT being scanned for malware.");
+    }
+    return;
+  }
+  if (!STRICT_SCANNER) {
+    console.warn("  !! ALLOW_UNSCANNED_UPLOADS=true — an upload is stored even when the scanner cannot check it.");
+  }
 }
 
 function looksLikeVideo(filePath) {
@@ -455,7 +510,19 @@ app.post("/api/upload", (req, res, next) => {
   const scanResult = await scanForMalware(req.file.path);
   if (!scanResult.clean) {
     if (scanResult.threatDetected) { removeIfExists(req.file.path); res.status(400).json({ error: "Upload blocked: malware threat detected.", scanner: scanResult.scanner, details: scanResult.reason }); return; }
-    if (STRICT_SCANNER) { removeIfExists(req.file.path); res.status(400).json({ error: "Upload blocked by malware scanner.", scanner: scanResult.scanner, details: scanResult.reason }); return; }
+    // Not a bad request — the server could not scan. Fail closed (503) and say how to
+    // fix it, rather than storing an unscanned file the operator never agreed to accept.
+    if (STRICT_SCANNER) {
+      removeIfExists(req.file.path);
+      modLog(`rejected upload from ${hashIp(req)}: malware scan unavailable (${scanResult.reason})`);
+      res.status(503).json({
+        error: "Upload blocked: this server cannot scan uploads for malware.",
+        scanner: scanResult.scanner,
+        details: scanResult.reason,
+        remedy: SCANNER_HELP,
+      });
+      return;
+    }
   }
 
   // Store: transcode to web-playable mp4 when the source isn't browser-safe.
@@ -595,7 +662,8 @@ setInterval(() => { pruneExpiredVideos(); pruneRateBuckets(); }, CLEANUP_INTERVA
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`VideoTub running on http://localhost:${PORT}`);
-    console.log(`  malware scanner: ${hasClamAV() ? "ClamAV" : "Windows Defender (if present)"}; ffmpeg: ${media.hasFfmpeg() ? "yes" : "no (thumbnails/transcode/phash disabled)"}`);
+    logScannerPosture();
+    console.log(`  ffmpeg: ${media.hasFfmpeg() ? "yes" : "no (thumbnails/transcode/phash disabled)"}`);
   });
 }
 

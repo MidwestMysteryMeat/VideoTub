@@ -67,10 +67,13 @@ A perceptual video hash (pHash of sampled frames) lets you block *near*-duplicat
 of removed content. The strongest upgrade to the "stays down when taken down"
 guarantee.
 
-### 7. Cross-platform malware scanning (ClamAV)
-Malware scan is Windows-Defender-only; on Linux it either blocks everything or
-runs unscanned. Add a ClamAV path (`clamdscan`) so a Linux host gets real
-scanning without the `ALLOW_UNSCANNED_UPLOADS` escape hatch.
+### 7. Cross-platform malware scanning (ClamAV) — partly done
+ClamAV (`clamdscan`/`clamscan`, or `CLAMSCAN_PATH`) is preferred over Windows
+Defender, the choice is resolved and logged at boot, and a host with no scanner now
+fails closed with an HTTP 503 that explains the remedy instead of a bare 400. What is
+still missing: **ClamAV is not bundled or provisioned**, so a Linux host still has to
+install it (or opt out) before uploads work — wire the commented `clamav` sidecar in
+`compose.yml` into the default compose path, and add a scanner smoke test.
 
 ### 8. Tests + CI
 No test suite for a lot of security-critical logic (PoW verify, report threshold,

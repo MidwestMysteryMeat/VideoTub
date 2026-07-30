@@ -67,23 +67,25 @@ a repo file: `public/app.js:130` and `public/admin.js:45`.
 | **Node 18+** | — | **required** | won't run |
 | **ffmpeg** | bare name on `PATH` (`media.js:13` `spawnSync("ffmpeg", ...)`, spawns at `media.js:42, 53, 73`). No bundled path, **no env var to override** | optional | **silent degradation, no crash**: thumbnails `return null` (`media.js:41`), transcode `return null` and the original file is kept (`media.js:52`, `server.js:465-471`), perceptual hash `return ""` so near-duplicate blocking is off (`media.js:71`) |
 | **ffprobe** | bare name on `PATH` (`server.js:276`) | optional | **fails open** — `server.js:270-279` resolves `{ ok: true, available: false }`, skipping decode validation and the `MAX_DURATION_SEC` cap. Magic-byte validation (`server.js:255-265`) still applies. `FFPROBE_DISABLED=1` forces the same skip |
-| **ClamAV** (`clamdscan` or `clamscan`) | `PATH` probe at `server.js:188-195`, spawned at `server.js:198-200` | one scanner required by default | see below |
-| **Windows Defender** `MpCmdRun.exe` | **hardcoded absolute paths**, not `PATH` — `server.js:211-229` checks `C:\Program Files\Windows Defender\`, `C:\Program Files\Microsoft Defender\`, and versioned `C:\ProgramData\...\Platform` dirs; invoked at `server.js:236` | fallback scanner (`server.js:250` prefers ClamAV) | see below |
+| **ClamAV** (`clamdscan` or `clamscan`) | `PATH` probe in `resolveScanner()`, or an explicit `CLAMSCAN_PATH` | preferred scanner; one scanner required unless you opt out | see below |
+| **Windows Defender** `MpCmdRun.exe` | **hardcoded absolute paths**, not `PATH` — `absoluteDefenderPath()` checks `C:\Program Files\Windows Defender\`, `C:\Program Files\Microsoft Defender\`, and versioned `C:\ProgramData\...\Platform` dirs | fallback scanner (ClamAV wins if both are present) | see below |
 | **Python + `nudenet`** | via `CONTENT_SCAN_CMD` env var (`server.js:52`), reference impl `tools/nsfw_scan.py` | optional, off by default | if the var is empty the scan is skipped (`server.js:291-300`); if set, spawn error or non-zero exit **rejects the upload** (`server.js:452-453`) |
 | **SQLite** (`better-sqlite3`) | npm native addon; the `.db` **file is created, not shipped** — `db.js:11-13` `mkdirSync` then `new Database(data/videotub.db)`, schema via `CREATE TABLE IF NOT EXISTS` | required | needs a prebuild or a toolchain; `Dockerfile:4` installs `python3 make g++` for this |
 
-**The one failure mode that will surprise a self-hoster:** with **no malware scanner
-present, every upload is rejected with HTTP 400** — the server still boots and browses
-fine. `server.js:233` returns `{clean: false, reason: "Windows Defender scanner
-executable not found"}` and `server.js:455-459` rejects because `STRICT_SCANNER` is on
-by default (`server.js:29`, `ALLOW_UNSCANNED_UPLOADS !== "true"`). Since the fallback
-scanner is Windows-only, **on Linux/macOS without ClamAV all uploads fail safe.** Set
-`ALLOW_UNSCANNED_UPLOADS=true` to store unscanned, or `MALWARE_SCAN=off`
-(`server.js:247-249`) to disable scanning entirely.
+**With no malware scanner present, every upload is rejected** — the server still boots
+and browses fine, so this used to be a silent surprise: a bare `HTTP 400` per upload and
+a boot line that claimed `malware scanner: Windows Defender (if present)` either way.
 
-The boot log reports both statuses (`server.js:598`), e.g.
-`ffmpeg: no (thumbnails/transcode/phash disabled)` and
-`malware scanner: Windows Defender (if present)`.
+That is now explicit. `resolveScanner()` runs once at boot and the outcome is printed in
+the startup banner; when nothing is available the banner carries a `!!` warning to stderr
+saying every upload will be refused, plus how to fix it. The refusal itself is
+**HTTP 503** (a server-side capability gap, not a bad request) and its body carries
+`scanner`, `details`, and a `remedy` string, which the upload UI shows to the user.
+
+Fail-closed is the default and is never relaxed implicitly. To accept uploads without a
+scanner you must say so: `MALWARE_SCAN=off` skips scanning entirely, or
+`ALLOW_UNSCANNED_UPLOADS=true` stores files the scanner could not check. Each prints its
+own `!!` boot warning. See the **Malware scanning** table in the README.
 
 `compose.yml:21-27` documents a commented-out `clamav/clamav:latest` sidecar;
 `Dockerfile:13` installs ffmpeg, so the Docker path gets media handling for free.
