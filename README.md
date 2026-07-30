@@ -247,7 +247,7 @@ authors accept no liability for how deployed instances are used. See
 
 ## Licensing
 
-- **VideoTub's own code is proprietary** — see [LICENSE](LICENSE), the **Ephemeral / Proprietary License** (All Rights Reserved with a Sharing Exception); no warranty (see above).
+- **VideoTub's own code is under the [Apache License 2.0](LICENSE)** — free to use, modify and self-host, commercially or not, **with credit**: keep the copyright notice and reproduce [`NOTICE`](NOTICE) in anything you distribute or deploy (Apache-2.0 §4(c)–(d)). No warranty (see above; §7–8).
 - **Runtime dependencies keep their own licenses.** `express` and `multer` are
   MIT (installed via `npm install`).
 - **Optional tools are installed separately and are not bundled or
@@ -258,11 +258,11 @@ authors accept no liability for how deployed instances are used. See
   - **ffmpeg / ffprobe** — used for frame sampling and video validation if
     present; installed separately under its own (LGPL/GPL) terms.
   - **Windows Defender** (`MpCmdRun.exe`) — an OS component, invoked if present.
-- The proof-of-work module (`pow.js`) is original code under the Ephemeral / Proprietary License.
+- The proof-of-work module (`pow.js`) is original code, under Apache-2.0 like the rest of this repo.
 
 Because those optional tools are only ever *invoked* (never copied into this
-repo), VideoTub's own code stays proprietary and free of third-party-license entanglement; if you redistribute a bundle that
-*includes* them, honor their licenses too.
+repo), VideoTub's own code stays cleanly Apache-2.0 and free of third-party-license
+entanglement; if you redistribute a bundle that *includes* them, honor their licenses too.
 
 ---
 
