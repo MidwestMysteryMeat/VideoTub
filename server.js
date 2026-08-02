@@ -45,7 +45,22 @@ const IP_BANLIST_FILE = path.join(DATA_DIR, "ip-banlist.txt");
 const PHASH_BLOCKLIST_FILE = path.join(DATA_DIR, "phash-blocklist.txt");
 const MOD_LOG_FILE = path.join(DATA_DIR, "moderation.log");
 
-const IP_SALT = crypto.randomBytes(16).toString("hex");
+// The salt must survive restarts: ip/fingerprint hashes feed the persistent
+// banlist and the durable report-dedupe store, so a fresh salt every boot would
+// silently orphan every stored ban and reset reporter identities. Created once
+// on first run, read thereafter.
+const IP_SALT_FILE = path.join(DATA_DIR, "ip-salt.txt");
+function loadOrCreateIpSalt() {
+  try {
+    const existing = fs.readFileSync(IP_SALT_FILE, "utf8").trim();
+    if (/^[a-f0-9]{32,}$/i.test(existing)) return existing;
+  } catch (_) {}
+  const salt = crypto.randomBytes(16).toString("hex");
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(IP_SALT_FILE, salt + "\n", "utf8");
+  return salt;
+}
+const IP_SALT = loadOrCreateIpSalt();
 
 const MAX_DURATION_SEC = Math.max(1, Number(process.env.MAX_DURATION_SEC || 900));
 const REQUIRE_APPROVAL = process.env.REQUIRE_APPROVAL === "true";
@@ -171,13 +186,16 @@ function removeVideo(id, reason) {
   return true;
 }
 
+function isAdminRequest(req) {
+  if (!ADMIN_KEY) return false;
+  const supplied = req.headers["x-admin-key"] || "";
+  return typeof supplied === "string" && supplied.length === ADMIN_KEY.length &&
+    crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(ADMIN_KEY));
+}
+
 function requireAdmin(req, res, next) {
   if (!ADMIN_KEY) { res.status(503).json({ error: "Admin API disabled (set ADMIN_KEY to enable)." }); return; }
-  const supplied = req.headers["x-admin-key"] || "";
-  if (typeof supplied !== "string" || supplied.length !== ADMIN_KEY.length ||
-      !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(ADMIN_KEY))) {
-    res.status(403).json({ error: "Forbidden." }); return;
-  }
+  if (!isAdminRequest(req)) { res.status(403).json({ error: "Forbidden." }); return; }
   next();
 }
 
@@ -356,6 +374,10 @@ function externalContentScan(filePath) {
 }
 
 function publicVideoShape(row) {
+  // A pending (unapproved) row gets no media URLs: the files aren't servable
+  // until approval, so handing out the paths would just be a broken link — and
+  // before the media routes were gated it was a full REQUIRE_APPROVAL bypass.
+  const approved = row.approved !== 0;
   return {
     id: row.id,
     title: row.title,
@@ -367,8 +389,8 @@ function publicVideoShape(row) {
     views: row.views || 0,
     tags: row.tags ? row.tags.split(",").filter(Boolean) : [],
     reportCount: db.reportCount(row.id),
-    thumbUrl: row.thumb_name ? `/thumbs/${encodeURIComponent(row.thumb_name)}` : null,
-    videoUrl: `/videos/${encodeURIComponent(row.stored_name)}`,
+    thumbUrl: approved && row.thumb_name ? `/thumbs/${encodeURIComponent(row.thumb_name)}` : null,
+    videoUrl: approved ? `/videos/${encodeURIComponent(row.stored_name)}` : null,
   };
 }
 
@@ -377,6 +399,24 @@ function pruneExpiredVideos() {
     removeIfExists(path.join(VIDEO_DIR, row.stored_name || ""));
     removeIfExists(path.join(THUMB_DIR, row.thumb_name || ""));
     db.deleteVideo(row.id);
+  }
+}
+
+// A crash/kill mid-upload strands multer temp files in TMP_DIR forever —
+// unbounded disk growth on a long-lived box. Sweep anything stale; an upload
+// still being written keeps a fresh mtime, so the age threshold never races a
+// live request (the max upload comfortably finishes within an hour).
+const TMP_MAX_AGE_MS = Math.max(60 * 1000, Number(process.env.TMP_MAX_AGE_MS || 60 * 60 * 1000));
+function sweepTmpDir() {
+  let entries;
+  try { entries = fs.readdirSync(TMP_DIR); } catch (_) { return; }
+  const cutoff = Date.now() - TMP_MAX_AGE_MS;
+  for (const name of entries) {
+    const p = path.join(TMP_DIR, name);
+    try {
+      const st = fs.statSync(p);
+      if (st.isFile() && st.mtimeMs <= cutoff) fs.unlinkSync(p);
+    } catch (_) {}
   }
 }
 
@@ -406,10 +446,23 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(PUBLIC_DIR));
+// Approval must hold for the raw files, not just the JSON API — otherwise
+// REQUIRE_APPROVAL's moderation queue never actually withholds content. Only
+// files backed by an approved DB row are served; admins (x-admin-key) can
+// still preview pending media before approving it.
+function approvedMediaOnly(check) {
+  return (req, res, next) => {
+    let name = "";
+    try { name = decodeURIComponent(req.path.replace(/^\/+/, "")); } catch (_) {}
+    if (!check(name) && !isAdminRequest(req)) { res.status(404).json({ error: "Not found." }); return; }
+    next();
+  };
+}
 // Prune before serving files so an expired video isn't watchable for up to
 // CLEANUP_INTERVAL_MS past expiry (same pattern as the list/get endpoints).
-app.use("/videos", (req, res, next) => { pruneExpiredVideos(); next(); }, express.static(VIDEO_DIR));
-app.use("/thumbs", express.static(THUMB_DIR));
+app.use("/videos", (req, res, next) => { pruneExpiredVideos(); next(); },
+  approvedMediaOnly(db.storedNameApproved), express.static(VIDEO_DIR));
+app.use("/thumbs", approvedMediaOnly(db.thumbNameApproved), express.static(THUMB_DIR));
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -657,7 +710,8 @@ app.use((err, req, res, next) => {
 app.get("*", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
 
 pruneExpiredVideos();
-setInterval(() => { pruneExpiredVideos(); pruneRateBuckets(); }, CLEANUP_INTERVAL_MS);
+sweepTmpDir();
+setInterval(() => { pruneExpiredVideos(); pruneRateBuckets(); sweepTmpDir(); }, CLEANUP_INTERVAL_MS);
 
 if (require.main === module) {
   app.listen(PORT, () => {

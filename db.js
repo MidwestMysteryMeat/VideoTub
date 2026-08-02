@@ -105,6 +105,18 @@ function approve(id) {
   return db.prepare("UPDATE videos SET approved = 1 WHERE id = ?").run(id).changes > 0;
 }
 
+// Approval checks for the raw media routes: only files backed by an approved
+// row may be served publicly.
+function storedNameApproved(name) {
+  if (!name) return false;
+  return !!db.prepare("SELECT 1 FROM videos WHERE stored_name = ? AND approved = 1").get(name);
+}
+
+function thumbNameApproved(name) {
+  if (!name) return false;
+  return !!db.prepare("SELECT 1 FROM videos WHERE thumb_name = ? AND approved = 1").get(name);
+}
+
 function incrementViews(id) {
   db.prepare("UPDATE videos SET views = views + 1 WHERE id = ?").run(id);
 }
@@ -128,4 +140,5 @@ function allTags() {
 module.exports = {
   init, insertVideo, getVideo, reportsFor, reportCount, listPublic, listAll,
   deleteVideo, addReport, approve, incrementViews, expiredRows, phashExists, allTags,
+  storedNameApproved, thumbNameApproved,
 };

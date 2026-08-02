@@ -135,6 +135,9 @@ commented sidecar / image add-on in `compose.yml`).
   directly exposed instance: clients could forge the header to dodge per-IP
   rate limits and bans and to fake the distinct reporters needed for
   auto-takedown.
+- `TMP_MAX_AGE_MS` (default `3600000` = 1 h) — temp upload files older than this
+  are swept at startup and on the cleanup interval (crash/kill mid-upload would
+  otherwise strand them forever)
 - `PAGE_SIZE` (default `24`) — videos per page in the listing
 - `VIDEOTUB_RUNTIME_DIR` — relocate the `data/`, `videos/`, `thumbs/`, `tmp/` dirs
 
